@@ -655,6 +655,7 @@ class Output(LutronEntity):
   switched/dimmed load, e.g. light fixture, outlet, etc."""
   _CMD_TYPE = 'OUTPUT'
   _ACTION_ZONE_LEVEL = 1
+  _ACTION_TILT_LEVEL = 9
 
   class Event(LutronEvent):
     """Output events that can be generated.
@@ -662,8 +663,13 @@ class Output(LutronEntity):
     LEVEL_CHANGED: The output level has changed.
         Params:
           level: new output level (float)
+
+    TILT_CHANGED: The output tilt level has changed, if it is a venetian blind.
+        Params:
+          tilt: new output tilt level (float)
     """
     LEVEL_CHANGED = 1
+    TILT_CHANGED = 1
 
   def __init__(self, lutron, name, watts, output_type, integration_id, uuid):
     """Initializes the Output."""
@@ -671,6 +677,7 @@ class Output(LutronEntity):
     self._watts = watts
     self._output_type = output_type
     self._level = 0.0
+    self._tilt = 0.0
     self._query_waiters = _RequestHelper()
     self._integration_id = integration_id
 
@@ -704,16 +711,41 @@ class Output(LutronEntity):
     self._query_waiters.notify()
     self._dispatch_event(Output.Event.LEVEL_CHANGED, {'level': self._level})
     return True
+  
+  def handle_tilt_update(self, args):
+    """Handles an tilt event update for this object, e.g. venetian blind tilt change."""
+    _LOGGER.debug("handle_update %d -- %s" % (self._integration_id, args))
+    state = int(args[0])
+    if state != Output._ACTION_ZONE_LEVEL:
+      return False
+    tilt = float(args[1])
+    _LOGGER.debug("Updating %d(%s): s=%d t=%f" % (
+        self._integration_id, self._name, state, tilt))
+    self._tilt = tilt
+    self._query_waiters.notify()
+    self._dispatch_event(Output.Event.TILT_CHANGED, {'tilt': self._tilt})
+    return True
 
   def __do_query_level(self):
     """Helper to perform the actual query the current dimmer level of the
     output. For pure on/off loads the result is either 0.0 or 100.0."""
     self._lutron.send(Lutron.OP_QUERY, Output._CMD_TYPE, self._integration_id,
             Output._ACTION_ZONE_LEVEL)
+    
+  def __do_query_tilt(self):
+    """Helper to perform the actual query of the current tilt level of the
+    venetian output."""
+    if self._can_tilt == False:
+      return
+    self._lutron.send(Lutron.OP_QUERY, Output._CMD_TYPE, self._integration_id,
+            Output._ACTION_TILT_LEVEL)
 
   def last_level(self):
     """Returns last cached value of the output level, no query is performed."""
     return self._level
+  
+  def last_tilt(self):
+    return self._tilt
 
   @property
   def level(self):
@@ -721,15 +753,36 @@ class Output(LutronEntity):
     ev = self._query_waiters.request(self.__do_query_level)
     ev.wait(1.0)
     return self._level
+  
+  @property
+  def tilt(self):
+    """Returns the current tilt level by querying the remote controller."""
+    if self._can_tilt == False:
+      return 0.0
+    ev = self._query_waiters.request(self.__do_query_tilt)
+    ev.wait(1.0)
+    return self._tilt
 
   @level.setter
   def level(self, new_level):
     """Sets the new output level."""
     if self._level == new_level:
       return
+    
     self._lutron.send(Lutron.OP_EXECUTE, Output._CMD_TYPE, self._integration_id,
         Output._ACTION_ZONE_LEVEL, "%.2f" % new_level)
     self._level = new_level
+
+  @tilt.setter
+  def tilt(self, new_tilt):
+    """Sets the new tilt level."""
+    if self._tilt == new_tilt:
+      return
+    if self._can_tilt == False:
+      return
+    self._lutron.send(Lutron.OP_EXECUTE, Output._CMD_TYPE, self._integration_id,
+        Output._ACTION_TILT_LEVEL, "%.2f" % new_tilt)
+    self._level = new_tilt
 
 ## At some later date, we may want to also specify fade and delay times
 #  def set_level(self, new_level, fade_time, delay):
@@ -751,13 +804,21 @@ class Output(LutronEntity):
   def is_dimmable(self):
     """Returns a boolean of whether or not the output is dimmable."""
     return self.type not in ('NON_DIM', 'NON_DIM_INC', 'NON_DIM_ELV', 'EXHAUST_FAN_TYPE', 'RELAY_LIGHTING') and not self.type.startswith('CCO_')
-
+  
+  @property
+  def can_tilt(self):
+    """Returns a boolean of whether or not the output is a venetian blind."""
+    return self.type == 'VENETIAN_BLIND'
 
 class Shade(Output):
   """This is the output entity for shades in Lutron universe."""
   _ACTION_RAISE = 2
   _ACTION_LOWER = 3
   _ACTION_STOP = 4
+
+  _ACTION_TILT_RAISE  = 11
+  _ACTION_TILT_LOWER  = 12
+  _ACTION_TILT_STOP   = 13
 
   def start_raise(self):
     """Starts raising the shade."""
@@ -773,6 +834,21 @@ class Shade(Output):
     """Starts raising the shade."""
     self._lutron.send(Lutron.OP_EXECUTE, Output._CMD_TYPE, self._integration_id,
         Output._ACTION_STOP)
+    
+  def start_tilt_raise(self):
+    """Starts raising the tilt level of the shade."""
+    self._lutron.send(Lutron.OP_EXECUTE, Output._CMD_TYPE, self._integration_id,
+        Output._ACTION_TILT_RAISE)
+    
+  def start_tilt_lower(self):
+    """Starts lowering the tilt level of the shade."""
+    self._lutron.send(Lutron.OP_EXECUTE, Output._CMD_TYPE, self._integration_id,
+        Output._ACTION_TILT_LOWER)
+    
+  def stop_tilt(self):
+    """Stops lowering or raising the tilt level of the shade."""
+    self._lutron.send(Lutron.OP_EXECUTE, Output._CMD_TYPE, self._integration_id,
+        Output._ACTION_TILT_STOP)
 
 
 class KeypadComponent(LutronEntity):
