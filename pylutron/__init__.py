@@ -745,6 +745,7 @@ class Output(LutronEntity):
     return self._level
   
   def last_tilt(self):
+    """Returns the last cached value of the tilt level, no query is performed"""
     return self._tilt
 
   @property
